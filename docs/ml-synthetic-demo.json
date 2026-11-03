@@ -1,0 +1,31 @@
+{
+  "source": "synthetic demonstration data; not real learner data",
+  "seed": 20261101,
+  "target": "probability of a correct next attempt for a skill",
+  "features": [
+    "recent_accuracy",
+    "attempt_count",
+    "average_response_seconds",
+    "hint_rate",
+    "days_since_practice",
+    "mastery_estimate",
+    "exercise_difficulty"
+  ],
+  "split": "group holdout by synthetic learner; 75% train / 25% test",
+  "model": "StandardScaler + LogisticRegression",
+  "metrics": {
+    "brier_score_model": 0.2092414823044612,
+    "brier_score_prevalence_baseline": 0.23990428615826478,
+    "log_loss_model": 0.6063077181313369,
+    "log_loss_prevalence_baseline": 0.6728325705163178,
+    "train_rows": 8640,
+    "test_rows": 2880,
+    "train_learners": 180,
+    "test_learners": 60
+  },
+  "limitations": [
+    "Synthetic patterns do not show real-world learning behavior.",
+    "Do not use this artifact to personalize real learners.",
+    "Train and evaluate on consented, de-identified practice records before deployment."
+  ]
+}
