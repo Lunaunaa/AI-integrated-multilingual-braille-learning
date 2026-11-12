@@ -16,6 +16,7 @@ from progress_service import (
     record_practice_attempt,
     record_quiz_result,
 )
+from registration_service import register_learner, restore_learner
 from verified_braille import (
     contains_unverified_dot_claim,
     is_pattern_question,
@@ -517,6 +518,86 @@ def create_quiz_result(data: QuizResultCreate):
     except Exception as error:
         print(f"Quiz result could not be recorded ({type(error).__name__}).")
         raise HTTPException(status_code=503, detail="Quiz data is unavailable.") from error
+
+
+# -------------------------
+# Learner registration
+# -------------------------
+
+class LearnerRegisterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str | None = Field(default=None, pattern=r"^\d{7,15}$")
+    email: str | None = Field(default=None, max_length=254)
+    batch: str | None = Field(default=None, max_length=100)
+    preferred_language: Literal["English", "Hindi", "Kannada"] = "English"
+    consent: bool
+
+
+class LearnerRestoreRequest(BaseModel):
+    phone_or_email: str = Field(min_length=1, max_length=254)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+@app.post("/learners/register", status_code=201)
+def learner_register(data: LearnerRegisterRequest):
+    """Teacher-assisted registration. Returns learner_id and a one-time 6-digit code.
+
+    Exactly one of phone or email must be supplied.  The 6-digit code is
+    returned in the response body and is never stored in plain text.
+    Phone numbers and email addresses are never written to logs.
+    """
+    if not data.phone and not data.email:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one of phone or email is required.",
+        )
+    if not data.consent:
+        raise HTTPException(
+            status_code=422,
+            detail="Consent is required to register a learner.",
+        )
+    try:
+        return register_learner(
+            name=data.name.strip(),
+            phone=data.phone,
+            email=data.email.strip().lower() if data.email else None,
+            batch=data.batch.strip() if data.batch else None,
+            language=data.preferred_language,
+            consent=data.consent,
+        )
+    except Exception as error:
+        # Avoid logging PII fields — only log the exception type.
+        print(f"Learner registration failed ({type(error).__name__}).")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not register learner.",
+        ) from error
+
+
+@app.post("/learners/restore")
+def learner_restore(data: LearnerRestoreRequest):
+    """Restore a learner account on a new device using phone/email + 6-digit code.
+
+    Returns the learner profile on success, 404 if the credentials do not match.
+    Phone numbers and email addresses are never written to logs.
+    """
+    try:
+        learner = restore_learner(
+            phone_or_email=data.phone_or_email.strip(),
+            code=data.code.strip(),
+        )
+    except Exception as error:
+        print(f"Learner restore failed ({type(error).__name__}).")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not restore learner account.",
+        ) from error
+    if learner is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No account matched the supplied credentials.",
+        )
+    return learner
 
 
 # -------------------------

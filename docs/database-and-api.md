@@ -18,6 +18,14 @@ The first migration creates:
   response time, and next review time.
 - `resonant.schema_migrations` — applied migration versions.
 
+Migration 002 extends `resonant.learners` with teacher-assisted registration
+fields: `name`, `phone`, `email`, `batch`, `consent_at`, `code_hash`, and
+`registered_by`.  Partial unique indexes enforce uniqueness for non-NULL
+`phone` and `email` while allowing multiple `NULL` values (standard
+PostgreSQL behaviour).  The 6-digit learner code is **never stored in
+plain text**; only its SHA-256 hash is persisted.  Phone numbers and email
+addresses are never written to application logs.
+
 Each write uses a psycopg connection context, so the event insert and mastery
 update commit or roll back together. Submission UUIDs prevent retries from
 creating duplicate attempts or quiz results. Only correct and incorrect
@@ -46,6 +54,14 @@ successful version. The SQL is additive and scoped to `resonant`.
 - `GET /health/database` checks PostgreSQL availability.
 - `POST /learners` creates or updates a learner's preferred language.
 - `GET /learners/{learner_id}` reads a learner profile.
+- `POST /learners/register` — teacher-assisted registration.  Accepts
+  `name` (required), `phone` (digits, 7–15 chars), `email`, `batch`,
+  `preferred_language`, and `consent` (boolean).  At least one of `phone`
+  or `email` is required; `consent` must be `true`.  Returns `learner_id`
+  and a one-time plaintext `learner_code` (6 digits, hashed before storage).
+- `POST /learners/restore` — restore an account on a new device.  Accepts
+  `phone_or_email` and the 6-digit `code`.  Returns the learner profile on
+  success; 404 if credentials do not match.
 - `POST /practice/attempts` records an idempotent practice event and updates
   skill progress for correct/incorrect answers.
 - `GET /learners/{learner_id}/progress` reads skill mastery.

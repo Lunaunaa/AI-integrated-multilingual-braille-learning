@@ -304,5 +304,170 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(model.classes_), 2)
 
 
+class RegistrationServiceTests(unittest.TestCase):
+    """Unit tests for registration_service.py — no database required."""
+
+    def test_generate_code_is_six_digits(self):
+        import registration_service
+        code = registration_service._generate_code()
+        self.assertRegex(code, r"^\d{6}$")
+
+    def test_hash_code_is_stable_sha256(self):
+        import hashlib
+        import registration_service
+        code = "123456"
+        expected = hashlib.sha256(code.encode()).hexdigest()
+        self.assertEqual(registration_service._hash_code(code), expected)
+
+    def test_different_codes_produce_different_hashes(self):
+        import registration_service
+        h1 = registration_service._hash_code("000001")
+        h2 = registration_service._hash_code("000002")
+        self.assertNotEqual(h1, h2)
+
+
+class LearnerRegisterEndpointTests(unittest.TestCase):
+    """Tests for POST /learners/register without a real database."""
+
+    def _make_valid_payload(self, **overrides):
+        payload = {
+            "name": "Priya",
+            "phone": "9876543210",
+            "preferred_language": "English",
+            "consent": True,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_register_requires_at_least_phone_or_email(self):
+        data = main.LearnerRegisterRequest(
+            name="Test", consent=True,
+        )
+        # Remove both phone and email
+        with self.assertRaises(Exception) as ctx:
+            main.learner_register(data)
+        # Should raise HTTPException with 422
+        from fastapi import HTTPException
+        self.assertIsInstance(ctx.exception, HTTPException)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_register_requires_consent(self):
+        from fastapi import HTTPException
+        data = main.LearnerRegisterRequest(
+            name="Test", phone="9876543210", consent=False,
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            main.learner_register(data)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_pydantic_rejects_non_digit_phone(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.LearnerRegisterRequest(
+                name="Test",
+                phone="not-a-number",
+                consent=True,
+            )
+
+    def test_pydantic_rejects_too_short_phone(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.LearnerRegisterRequest(
+                name="Test",
+                phone="123",   # fewer than 7 digits
+                consent=True,
+            )
+
+    def test_register_calls_registration_service_and_returns_code(self):
+        import registration_service
+        sentinel = {
+            "learner_id": "uuid-abc",
+            "learner_code": "042817",
+            "name": "Priya",
+            "phone": "9876543210",
+            "email": None,
+            "batch": None,
+            "preferred_language": "English",
+            "consent_at": None,
+            "created_at": None,
+        }
+        with patch.object(registration_service, "register_learner", return_value=sentinel) as mock_reg:
+            data = main.LearnerRegisterRequest(
+                name="Priya", phone="9876543210", consent=True,
+            )
+            result = main.learner_register(data)
+        mock_reg.assert_called_once()
+        self.assertEqual(result["learner_code"], "042817")
+
+    def test_register_propagates_db_error_as_500(self):
+        import registration_service
+        from fastapi import HTTPException
+        with patch.object(registration_service, "register_learner", side_effect=RuntimeError("db down")):
+            data = main.LearnerRegisterRequest(
+                name="Priya", phone="9876543210", consent=True,
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                main.learner_register(data)
+        self.assertEqual(ctx.exception.status_code, 500)
+
+
+class LearnerRestoreEndpointTests(unittest.TestCase):
+    """Tests for POST /learners/restore without a real database."""
+
+    def test_restore_returns_404_on_mismatch(self):
+        import registration_service
+        from fastapi import HTTPException
+        with patch.object(registration_service, "restore_learner", return_value=None):
+            data = main.LearnerRestoreRequest(
+                phone_or_email="9876543210", code="000000",
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                main.learner_restore(data)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_restore_returns_learner_on_match(self):
+        import registration_service
+        sentinel = {
+            "learner_id": "uuid-abc",
+            "name": "Priya",
+            "phone": "9876543210",
+            "email": None,
+            "batch": None,
+            "preferred_language": "English",
+            "created_at": None,
+        }
+        with patch.object(registration_service, "restore_learner", return_value=sentinel):
+            data = main.LearnerRestoreRequest(
+                phone_or_email="9876543210", code="042817",
+            )
+            result = main.learner_restore(data)
+        self.assertEqual(result["learner_id"], "uuid-abc")
+
+    def test_pydantic_rejects_non_six_digit_code(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.LearnerRestoreRequest(
+                phone_or_email="9876543210", code="12345",  # 5 digits
+            )
+
+    def test_pydantic_rejects_alpha_code(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.LearnerRestoreRequest(
+                phone_or_email="9876543210", code="abc123",
+            )
+
+    def test_restore_propagates_db_error_as_500(self):
+        import registration_service
+        from fastapi import HTTPException
+        with patch.object(registration_service, "restore_learner", side_effect=RuntimeError("db down")):
+            data = main.LearnerRestoreRequest(
+                phone_or_email="9876543210", code="042817",
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                main.learner_restore(data)
+        self.assertEqual(ctx.exception.status_code, 500)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ import 'package:resonant_braille/tutor/voice_command_parser.dart';
 import 'package:resonant_braille/accessibility/two_finger_navigation_detector.dart';
 import 'package:resonant_braille/learning/role_selection_page.dart';
 import 'package:resonant_braille/learning/role_store.dart';
+import 'package:resonant_braille/learning/learner_registration_page.dart';
 import 'package:resonant_braille/teacher/teacher_dashboard_placeholder.dart';
 
 Future<void> main() async {
@@ -94,10 +95,34 @@ class _RoleGateRootState extends State<_RoleGateRoot> {
     return RoleGate(
       onSpeak: _speak,
       onStop: _stop,
-      learnerHome: const ResonantHome(),
+      learnerHome: const _LearnerGate(),
       teacherHome: (onSwitchRole) => TeacherDashboardPlaceholder(
         onSwitchRole: onSwitchRole,
       ),
+    );
+  }
+}
+
+/// Thin stateful bridge: shows [LearnerRegistrationGate] until an account is
+/// confirmed, then shows [ResonantHome].  Keeps the learner path decoupled
+/// from [RoleGate] so [RoleGate] needs no knowledge of registration.
+class _LearnerGate extends StatefulWidget {
+  const _LearnerGate();
+
+  @override
+  State<_LearnerGate> createState() => _LearnerGateState();
+}
+
+class _LearnerGateState extends State<_LearnerGate> {
+  bool _ready = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_ready) return const ResonantHome();
+    return LearnerRegistrationGate(
+      onAccountReady: (_) {
+        if (mounted) setState(() => _ready = true);
+      },
     );
   }
 }
