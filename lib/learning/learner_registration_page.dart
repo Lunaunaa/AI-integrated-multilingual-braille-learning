@@ -166,36 +166,37 @@ class _AwaitRegistrationScreenState extends State<_AwaitRegistrationScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF202124),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              const SizedBox(height: 16),
               const Icon(
                 Icons.school_outlined,
                 color: Color(0xFF8AB4F8),
-                size: 72,
+                size: 60,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               const Text(
                 'Welcome',
                 style: TextStyle(
                   color: Color(0xFFE8EAED),
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.bold,
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               const Text(
                 'Please ask your teacher to help you register.',
                 style: TextStyle(
                   color: Color(0xFF9AA0A6),
-                  fontSize: 18,
+                  fontSize: 16,
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 48),
+              const SizedBox(height: 28),
               Semantics(
                 button: true,
                 label: 'Teacher: Register learner',
@@ -204,21 +205,21 @@ class _AwaitRegistrationScreenState extends State<_AwaitRegistrationScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2468D9),
                     foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 80),
+                    minimumSize: const Size(double.infinity, 64),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
                     textStyle: const TextStyle(
-                      fontSize: 24,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  icon: const Icon(Icons.app_registration, size: 32),
+                  icon: const Icon(Icons.app_registration, size: 28),
                   label: const Text('Teacher: Register learner'),
                   onPressed: _openRegistration,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               TextButton(
                 key: const ValueKey('already-have-account-button'),
                 onPressed: _openRestore,
@@ -226,7 +227,7 @@ class _AwaitRegistrationScreenState extends State<_AwaitRegistrationScreen> {
                   'I already have an account',
                   style: TextStyle(
                     color: Color(0xFF8AB4F8),
-                    fontSize: 16,
+                    fontSize: 15,
                   ),
                 ),
               ),
@@ -261,6 +262,7 @@ class _TeacherRegistrationFormState extends State<_TeacherRegistrationForm> {
   final _phoneCtr = TextEditingController();
   final _emailCtr = TextEditingController();
   final _batchCtr = TextEditingController();
+  String _selectedLanguage = 'English';
   bool _consent = false;
   bool _submitting = false;
   String? _errorMessage;
@@ -294,7 +296,7 @@ class _TeacherRegistrationFormState extends State<_TeacherRegistrationForm> {
         phone: phone.isEmpty ? null : phone,
         email: email.isEmpty ? null : email,
         batch: _batchCtr.text.trim().isEmpty ? null : _batchCtr.text.trim(),
-        preferredLanguage: 'English',
+        preferredLanguage: _selectedLanguage,
         consent: _consent,
       );
       final store = widget.accountStorage ?? await LearnerAccountStore.forApplication();
@@ -386,8 +388,31 @@ class _TeacherRegistrationFormState extends State<_TeacherRegistrationForm> {
                 hint: 'e.g. Grade 6 – Section A',
               ),
               const SizedBox(height: 16),
-              // Preferred language — English only for now.
-              _readonlyField('Preferred language', 'English'),
+              // Preferred language dropdown (English, Hindi, Kannada)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF303134),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedLanguage,
+                    dropdownColor: const Color(0xFF303134),
+                    style: const TextStyle(color: Color(0xFFE8EAED), fontSize: 16),
+                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF9AA0A6)),
+                    isExpanded: true,
+                    items: const [
+                      DropdownMenuItem(value: 'English', child: Text('Preferred language: English')),
+                      DropdownMenuItem(value: 'Hindi', child: Text('Preferred language: Hindi')),
+                      DropdownMenuItem(value: 'Kannada', child: Text('Preferred language: Kannada')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setState(() => _selectedLanguage = val);
+                    },
+                  ),
+                ),
+              ),
               const SizedBox(height: 24),
               // Consent checkbox
               CheckboxListTile(
@@ -551,98 +576,103 @@ class _CodeDisplayScreenState extends State<_CodeDisplayScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF202124),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              const SizedBox(height: 8),
               const Icon(
                 Icons.check_circle_outline,
                 color: Color(0xFF34A853),
-                size: 72,
+                size: 56,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
               const Text(
                 'Registration complete!',
                 style: TextStyle(
                   color: Color(0xFFE8EAED),
-                  fontSize: 28,
+                  fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Text(
                 widget.account.name,
                 style: const TextStyle(
                   color: Color(0xFF9AA0A6),
-                  fontSize: 18,
+                  fontSize: 16,
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 16),
               const Text(
                 'Learner code',
                 style: TextStyle(
                   color: Color(0xFF9AA0A6),
-                  fontSize: 16,
+                  fontSize: 14,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Semantics(
                 label: 'Learner code: ${code.split('').join(', ')}',
-                child: Text(
-                  code,
-                  style: const TextStyle(
-                    color: Color(0xFF8AB4F8),
-                    fontSize: 56,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 12,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    code,
+                    style: const TextStyle(
+                      color: Color(0xFF8AB4F8),
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 10,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               const Text(
                 'Write this code down. It is needed to restore the account on a new device.',
-                style: TextStyle(color: Color(0xFF9AA0A6), fontSize: 13),
+                style: TextStyle(color: Color(0xFF9AA0A6), fontSize: 12),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 20),
               OutlinedButton.icon(
                 key: const ValueKey('repeat-code-button'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF8AB4F8),
                   side: const BorderSide(color: Color(0xFF8AB4F8)),
-                  minimumSize: const Size(220, 56),
+                  minimumSize: const Size(200, 48),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                icon: const Icon(Icons.volume_up_outlined),
+                icon: const Icon(Icons.volume_up_outlined, size: 20),
                 label: const Text(
                   'Repeat code',
-                  style: TextStyle(fontSize: 18),
+                  style: TextStyle(fontSize: 16),
                 ),
                 onPressed: _speakCode,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               ElevatedButton(
                 key: const ValueKey('continue-button'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2468D9),
                   foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 64),
+                  minimumSize: const Size(double.infinity, 56),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                   textStyle: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 onPressed: widget.onDone,
-                child: const Text('Continue to learning'),
+                child: const Text('Start Lesson Plan'),
               ),
+              const SizedBox(height: 16),
             ],
           ),
         ),

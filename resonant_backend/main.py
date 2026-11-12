@@ -17,7 +17,7 @@ from progress_service import (
     record_practice_attempt,
     record_quiz_result,
 )
-from registration_service import register_learner, restore_learner
+import registration_service
 from teacher_service import (
     signup_teacher,
     login_teacher,
@@ -761,7 +761,7 @@ def learner_register(
             detail="Consent is required to register a learner.",
         )
     try:
-        return register_learner(
+        return registration_service.register_learner(
             name=data.name.strip(),
             phone=data.phone,
             email=data.email.strip().lower() if data.email else None,
@@ -787,7 +787,7 @@ def learner_restore(data: LearnerRestoreRequest):
     Phone numbers and email addresses are never written to logs.
     """
     try:
-        learner = restore_learner(
+        learner = registration_service.restore_learner(
             phone_or_email=data.phone_or_email.strip(),
             code=data.code.strip(),
         )
