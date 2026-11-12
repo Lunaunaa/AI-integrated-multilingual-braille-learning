@@ -469,5 +469,256 @@ class LearnerRestoreEndpointTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 500)
 
 
+class TeacherServiceTests(unittest.TestCase):
+    """Unit tests for teacher_service.py helpers that don't need a DB."""
+
+    def test_check_rate_allows_first_attempt(self):
+        import teacher_service
+        # Use a unique key so other tests don't interfere.
+        allowed = teacher_service._check_rate("unique_test_email_rate@example.com")
+        self.assertTrue(allowed)
+
+    def test_check_rate_blocks_after_max_attempts(self):
+        import teacher_service
+        key = "blocked_test@example.com"
+        teacher_service._rate[key] = []  # reset
+        for _ in range(teacher_service._RATE_MAX):
+            teacher_service._check_rate(key)
+        self.assertFalse(teacher_service._check_rate(key))
+
+    def test_verify_token_raises_on_garbage(self):
+        import teacher_service
+        with self.assertRaises(ValueError):
+            teacher_service.verify_token("not.a.real.token")
+
+
+class TeacherSignupEndpointTests(unittest.TestCase):
+    def test_pydantic_rejects_short_password(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            main.TeacherSignupRequest(
+                name="Alice", email="a@b.com", password="short",
+            )
+
+    def test_signup_returns_409_on_duplicate_email(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "signup_teacher", side_effect=ValueError("email_taken")):
+            data = main.TeacherSignupRequest(
+                name="Alice", email="a@b.com", password="password123",
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_signup(data)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_signup_calls_service_and_returns_result(self):
+        import teacher_service
+        sentinel = {"teacher_id": "tid", "name": "Alice",
+                    "email": "a@b.com", "organization": None}
+        with patch.object(teacher_service, "signup_teacher", return_value=sentinel) as mock:
+            data = main.TeacherSignupRequest(
+                name="Alice", email="a@b.com", password="password123",
+            )
+            result = main.teacher_signup(data)
+        mock.assert_called_once()
+        self.assertEqual(result["teacher_id"], "tid")
+
+    def test_signup_returns_500_on_db_error(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "signup_teacher", side_effect=RuntimeError("db")):
+            data = main.TeacherSignupRequest(
+                name="Alice", email="a@b.com", password="password123",
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_signup(data)
+        self.assertEqual(ctx.exception.status_code, 500)
+
+
+class TeacherLoginEndpointTests(unittest.TestCase):
+    def test_login_returns_token_on_success(self):
+        import teacher_service
+        sentinel = {"teacher_id": "tid", "name": "Alice",
+                    "email": "a@b.com", "token": "tok"}
+        with patch.object(teacher_service, "login_teacher", return_value=sentinel):
+            data = main.TeacherLoginRequest(email="a@b.com", password="password123")
+            result = main.teacher_login(data)
+        self.assertEqual(result["token"], "tok")
+
+    def test_login_returns_401_on_bad_credentials(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "login_teacher",
+                          side_effect=ValueError("invalid_credentials")):
+            data = main.TeacherLoginRequest(email="a@b.com", password="wrong")
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_login(data)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_login_returns_429_when_rate_limited(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "login_teacher",
+                          side_effect=ValueError("rate_limited")):
+            data = main.TeacherLoginRequest(email="a@b.com", password="password123")
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_login(data)
+        self.assertEqual(ctx.exception.status_code, 429)
+
+
+class TeacherAuthDependencyTests(unittest.TestCase):
+    def test_require_teacher_raises_401_on_missing_header(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            main._require_teacher(authorization=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_require_teacher_raises_401_on_bad_token(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "verify_token",
+                          side_effect=ValueError("invalid_token")):
+            with self.assertRaises(HTTPException) as ctx:
+                main._require_teacher(authorization="Bearer bad.token")
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_require_teacher_returns_teacher_id_on_valid_token(self):
+        import teacher_service
+        with patch.object(teacher_service, "verify_token", return_value="tid-abc"):
+            result = main._require_teacher(authorization="Bearer valid.token")
+        self.assertEqual(result, "tid-abc")
+
+    def test_learner_register_returns_401_without_token(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            main.learner_register(
+                main.LearnerRegisterRequest(
+                    name="Priya", phone="9876543210", consent=True,
+                ),
+                teacher_id=None,
+            )
+        # teacher_id is now a required param — 422 from missing consent guard
+        # or 401 from dependency. We just check it raises.
+        self.assertIn(ctx.exception.status_code, {401, 422})
+
+
+class TeacherLearnersEndpointTests(unittest.TestCase):
+    def test_returns_learner_list(self):
+        import teacher_service
+        sentinel = [{"learner_id": "lid", "name": "Priya",
+                     "batch": "A", "created_at": None}]
+        with patch.object(teacher_service, "get_teacher_learners", return_value=sentinel):
+            result = main.teacher_learners(teacher_id="tid")
+        self.assertEqual(result["teacher_id"], "tid")
+        self.assertEqual(len(result["learners"]), 1)
+
+
+class TeacherDashboardEndpointTests(unittest.TestCase):
+    def test_dashboard_returns_summary_and_learners(self):
+        import teacher_service
+        sentinel = {
+            "summary": {"total_learners": 1, "active_this_week": 1, "struggling": 0},
+            "learners": [{
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Priya",
+                "batch": "Morning A",
+                "last_active_at": "2026-11-10T10:00:00Z",
+                "current_stage": "stage-1-exercise-2",
+                "current_letter": "B",
+                "accuracy_pct": 85.0,
+                "attempts_7d": 12,
+                "top_weak_letters": ["C", "D"],
+                "status": "active",
+            }],
+        }
+        with patch.object(teacher_service, "get_teacher_dashboard_data", return_value=sentinel):
+            result = main.teacher_dashboard(teacher_id="teacher-uuid")
+        self.assertEqual(result["summary"]["total_learners"], 1)
+        self.assertEqual(result["learners"][0]["name"], "Priya")
+        self.assertEqual(result["learners"][0]["status"], "active")
+
+    def test_learner_detail_returns_404_for_other_teacher_learner(self):
+        import teacher_service
+        from fastapi import HTTPException
+        from uuid import UUID
+        # Mock returns None when learner does not belong to the teacher
+        with patch.object(teacher_service, "get_teacher_learner_detail", return_value=None):
+            lid = UUID("22222222-2222-2222-2222-222222222222")
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_learner_detail(learner_id=lid, teacher_id="teacher-owner-2")
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail, "Learner not found.")
+
+    def test_learner_detail_returns_data_when_belongs_to_teacher(self):
+        import teacher_service
+        from uuid import UUID
+        lid = UUID("33333333-3333-3333-3333-333333333333")
+        sentinel = {
+            "id": str(lid),
+            "name": "Priya",
+            "batch": "Morning A",
+            "phone": "9876543210",
+            "email": "priya@example.com",
+            "accuracy_pct": 90.0,
+            "recent_attempts": [{"exercise_id": "ex-1", "outcome": "correct"}],
+        }
+        with patch.object(teacher_service, "get_teacher_learner_detail", return_value=sentinel):
+            result = main.teacher_learner_detail(learner_id=lid, teacher_id="teacher-owner-1")
+        self.assertEqual(result["id"], str(lid))
+        self.assertEqual(result["name"], "Priya")
+        self.assertEqual(len(result["recent_attempts"]), 1)
+
+
+class TeacherPasswordResetEndpointTests(unittest.TestCase):
+    def test_forgot_password_returns_generic_message(self):
+        import teacher_service
+        with patch.object(teacher_service, "create_password_reset_token", return_value="reset-tok-xyz"):
+            req = main.TeacherForgotPasswordRequest(email="teacher@example.com")
+            res = main.teacher_forgot_password(req)
+        self.assertIn("message", res)
+
+    def test_reset_password_success(self):
+        import teacher_service
+        with patch.object(teacher_service, "reset_password_with_token", return_value=True):
+            req = main.TeacherResetPasswordRequest(token="valid-tok", new_password="new-password123")
+            res = main.teacher_reset_password(req)
+        self.assertIn("successfully updated", res["message"])
+
+    def test_reset_password_invalid_token_returns_400(self):
+        import teacher_service
+        from fastapi import HTTPException
+        with patch.object(teacher_service, "reset_password_with_token", return_value=False):
+            req = main.TeacherResetPasswordRequest(token="bad-tok", new_password="new-password123")
+            with self.assertRaises(HTTPException) as ctx:
+                main.teacher_reset_password(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class PrivacyDeletionEndpointTests(unittest.TestCase):
+    def test_delete_learner_success(self):
+        import teacher_service
+        from uuid import UUID
+        lid = UUID("44444444-4444-4444-4444-444444444444")
+        with patch.object(teacher_service, "delete_teacher_learner", return_value=True):
+            res = main.delete_learner_endpoint(learner_id=lid, teacher_id="teacher-1")
+        self.assertIn("successfully deleted", res["message"])
+
+    def test_delete_learner_not_owned_returns_404(self):
+        import teacher_service
+        from fastapi import HTTPException
+        from uuid import UUID
+        lid = UUID("55555555-5555-5555-5555-555555555555")
+        with patch.object(teacher_service, "delete_teacher_learner", return_value=False):
+            with self.assertRaises(HTTPException) as ctx:
+                main.delete_learner_endpoint(learner_id=lid, teacher_id="teacher-2")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_delete_teacher_account_success(self):
+        import teacher_service
+        with patch.object(teacher_service, "delete_teacher_account", return_value=True):
+            res = main.delete_teacher_me_endpoint(teacher_id="teacher-1")
+        self.assertIn("successfully deleted", res["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

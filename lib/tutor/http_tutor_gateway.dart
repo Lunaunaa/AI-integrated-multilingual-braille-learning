@@ -2,12 +2,10 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../core/api_config.dart';
 import 'voice_tutor_controller.dart';
 
-const tutorApiBaseUrl = String.fromEnvironment(
-  'RESONANT_TUTOR_API_BASE',
-  defaultValue: 'http://localhost:8000',
-);
+const tutorApiBaseUrl = apiBaseUrl;
 
 class HttpTutorGateway implements TutorGateway {
   HttpTutorGateway({http.Client? client, Uri? baseUri})

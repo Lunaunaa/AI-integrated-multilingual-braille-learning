@@ -29,7 +29,8 @@ def _hash_code(code: str) -> str:
 # ---------------------------------------------------------------------------
 
 def register_learner(name: str, phone: str | None, email: str | None,
-                     batch: str | None, language: str, consent: bool) -> dict:
+                     batch: str | None, language: str, consent: bool,
+                     teacher_id: str | None = None) -> dict:
     """Insert a new learner row and return learner_id + plaintext code.
 
     The plaintext code is returned exactly once and never stored.
@@ -46,9 +47,9 @@ def register_learner(name: str, phone: str | None, email: str | None,
             """
             INSERT INTO resonant.learners
                 (learner_id, username, preferred_language,
-                 name, phone, email, batch, consent_at, code_hash)
+                 name, phone, email, batch, consent_at, code_hash, teacher_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s,
-                    CASE WHEN %s THEN now() ELSE NULL END, %s)
+                    CASE WHEN %s THEN now() ELSE NULL END, %s, %s)
             RETURNING learner_id, username, preferred_language,
                       name, phone, email, batch, consent_at, created_at
             """,
@@ -62,6 +63,7 @@ def register_learner(name: str, phone: str | None, email: str | None,
                 batch or None,
                 consent,
                 code_hash,
+                teacher_id or None,
             ),
         ).fetchone()
     result = dict(row)

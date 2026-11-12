@@ -6,6 +6,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 
 import 'learner_account_store.dart';
 import 'learner_api.dart';
+import '../teacher/teacher_session_store.dart';
+import '../teacher/teacher_login_page.dart';
 
 // ---------------------------------------------------------------------------
 // LearnerRegistrationGate
@@ -107,12 +109,36 @@ class _AwaitRegistrationScreen extends StatefulWidget {
 }
 
 class _AwaitRegistrationScreenState extends State<_AwaitRegistrationScreen> {
+  /// Ensures there is a valid teacher session before opening the registration
+  /// form.  If no session is saved, shows [TeacherLoginPage] first.
+  /// Returns the token string, or null if the teacher dismissed login.
+  Future<String?> _ensureTeacherToken() async {
+    final store = await TeacherSessionStore.forApplication();
+    final existing = await store.load();
+    if (existing != null) return existing.token;
+    // No session — ask the teacher to log in.
+    if (!mounted) return null;
+    final session = await Navigator.of(context).push<dynamic>(
+      MaterialPageRoute<dynamic>(
+        builder: (_) => TeacherLoginPage(sessionStorage: store),
+      ),
+    );
+    if (session == null) return null;
+    // session may be a TeacherSession object returned from TeacherLoginPage.
+    if (session is TeacherSession) return session.token;
+    // Reload from store in case login saved it but returned void.
+    final saved = await store.load();
+    return saved?.token;
+  }
+
   Future<void> _openRegistration() async {
+    final token = await _ensureTeacherToken();
+    if (token == null || !mounted) return;
     final account = await Navigator.of(context).push<LearnerAccount>(
       MaterialPageRoute<LearnerAccount>(
         builder: (_) => _TeacherRegistrationForm(
           accountStorage: widget.accountStorage,
-          api: widget.api,
+          api: widget.api ?? LearnerApi(teacherToken: token),
         ),
       ),
     );
@@ -286,8 +312,13 @@ class _TeacherRegistrationFormState extends State<_TeacherRegistrationForm> {
     } on LearnerApiException catch (e) {
       setState(() => _errorMessage = e.message);
     } catch (_) {
-      setState(() =>
-          _errorMessage = 'Registration failed. Please check your connection.');
+      const msg = 'Cannot connect to server. Please check your network connection and server settings.';
+      setState(() => _errorMessage = msg);
+      // Announce audibly as well so visually impaired learners/assistants are aware
+      try {
+        final tts = FlutterTts();
+        tts.speak(msg);
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -667,8 +698,12 @@ class _RestoreAccountFormState extends State<_RestoreAccountForm> {
     } on LearnerApiException catch (e) {
       setState(() => _errorMessage = e.message);
     } catch (_) {
-      setState(() =>
-          _errorMessage = 'Could not restore account. Check your connection.');
+      const msg = 'Cannot connect to server. Please check your network connection and server settings.';
+      setState(() => _errorMessage = msg);
+      try {
+        final tts = FlutterTts();
+        tts.speak(msg);
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _submitting = false);
     }

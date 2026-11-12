@@ -3,7 +3,8 @@ import os
 from typing import Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import requests
 from psycopg.errors import ForeignKeyViolation
@@ -17,6 +18,19 @@ from progress_service import (
     record_quiz_result,
 )
 from registration_service import register_learner, restore_learner
+from teacher_service import (
+    signup_teacher,
+    login_teacher,
+    verify_token,
+    get_teacher_learners,
+    get_teacher_dashboard_data,
+    get_teacher_learner_detail,
+    create_password_reset_token,
+    reset_password_with_token,
+    delete_teacher_learner,
+    delete_teacher_account,
+    _get_jwt_secret,
+)
 from verified_braille import (
     contains_unverified_dot_claim,
     is_pattern_question,
@@ -37,6 +51,21 @@ from knowledge_base import (
 
 
 app = FastAPI(title="Resonant AI Braille Tutor")
+
+# Verify JWT secret configuration at startup (fails fast if missing)
+_get_jwt_secret()
+
+# Configure CORS
+allowed_origins_raw = os.getenv("RESONANT_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000")
+allowed_origins = [origin.strip() for origin in allowed_origins_raw.split(",") if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins if allowed_origins else ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 OLLAMA_BASE_URL = os.getenv("RESONANT_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_URL = f"{OLLAMA_BASE_URL}/api/chat"
@@ -521,6 +550,179 @@ def create_quiz_result(data: QuizResultCreate):
 
 
 # -------------------------
+# Teacher accounts
+# -------------------------
+
+class TeacherSignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+    organization: str | None = Field(default=None, max_length=200)
+
+
+class TeacherLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class TeacherForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class TeacherResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=10)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+def _require_teacher(authorization: str | None = Header(default=None)) -> str:
+    """FastAPI dependency: extract and verify Bearer token; return teacher_id."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        return verify_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+
+@app.post("/teachers/signup", status_code=201)
+def teacher_signup(data: TeacherSignupRequest):
+    """Create a teacher account. Returns teacher profile (no token yet).
+
+    Emails are never written to logs.
+    """
+    try:
+        return signup_teacher(
+            name=data.name.strip(),
+            email=data.email.strip(),
+            password=data.password,
+            organization=data.organization.strip() if data.organization else None,
+        )
+    except ValueError as exc:
+        if str(exc) == "email_taken":
+            raise HTTPException(status_code=409, detail="Email is already registered.")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as error:
+        print(f"Teacher signup failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Could not create teacher account.") from error
+
+
+@app.post("/teachers/login")
+def teacher_login(data: TeacherLoginRequest):
+    """Verify credentials; return signed JWT token with 30-day expiry.
+
+    Emails and passwords are never written to logs.
+    Rate-limited to 10 attempts per email per 10 minutes.
+    """
+    try:
+        return login_teacher(email=data.email.strip(), password=data.password)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "rate_limited":
+            raise HTTPException(status_code=429, detail="Too many login attempts. Please wait.")
+        raise HTTPException(status_code=401, detail="Invalid email or password.") from exc
+    except Exception as error:
+        print(f"Teacher login failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Login unavailable.") from error
+
+
+@app.get("/teachers/me/learners")
+def teacher_learners(teacher_id: str = Depends(_require_teacher)):
+    """List learners registered by this teacher (id, name, batch, created_at)."""
+    try:
+        return {"teacher_id": teacher_id, "learners": get_teacher_learners(teacher_id)}
+    except Exception as error:
+        print(f"Teacher learner list failed ({type(error).__name__}).")
+        raise HTTPException(status_code=503, detail="Learner list unavailable.") from error
+
+
+@app.get("/teachers/me/dashboard")
+def teacher_dashboard(teacher_id: str = Depends(_require_teacher)):
+    """Summary metrics and full learner progress list for this teacher."""
+    try:
+        return get_teacher_dashboard_data(teacher_id)
+    except Exception as error:
+        print(f"Teacher dashboard failed ({type(error).__name__}).")
+        raise HTTPException(status_code=503, detail="Dashboard data unavailable.") from error
+
+
+@app.get("/teachers/me/learners/{learner_id}")
+def teacher_learner_detail(learner_id: UUID, teacher_id: str = Depends(_require_teacher)):
+    """Get single learner detail with recent attempts. Returns 404 for learners belonging to other teachers."""
+    try:
+        learner = get_teacher_learner_detail(teacher_id, str(learner_id))
+    except Exception as error:
+        print(f"Teacher learner detail failed ({type(error).__name__}).")
+        raise HTTPException(status_code=503, detail="Learner detail unavailable.") from error
+
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found.")
+    return learner
+
+
+@app.post("/teachers/forgot-password")
+def teacher_forgot_password(data: TeacherForgotPasswordRequest):
+    """Generate a short-lived reset token for a teacher account.
+    Logs token to server console (mock email delivery) and returns generic success.
+    Never logs email.
+    """
+    try:
+        token = create_password_reset_token(data.email)
+        if token:
+            # TODO: Integrate production email provider (e.g. SendGrid, SES)
+            print(f"[AUTH PASSWORD RESET] One-time reset token: {token}")
+        return {"message": "If this email is registered, a password reset token has been issued."}
+    except Exception as error:
+        print(f"Forgot password failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Password reset request failed.") from error
+
+
+@app.post("/teachers/reset-password")
+def teacher_reset_password(data: TeacherResetPasswordRequest):
+    """Verify reset token and update password."""
+    try:
+        success = reset_password_with_token(data.token, data.new_password)
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        return {"message": "Password successfully updated. You may now log in."}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Reset password failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Password reset failed.") from error
+
+
+@app.delete("/learners/{learner_id}")
+def delete_learner_endpoint(learner_id: UUID, teacher_id: str = Depends(_require_teacher)):
+    """Delete a learner and all their attempts/progress. Only allows deleting own learners."""
+    try:
+        success = delete_teacher_learner(teacher_id, str(learner_id))
+        if not success:
+            raise HTTPException(status_code=404, detail="Learner not found or does not belong to you.")
+        return {"message": "Learner and associated records successfully deleted."}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Delete learner failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Could not delete learner.") from error
+
+
+@app.delete("/teachers/me")
+def delete_teacher_me_endpoint(teacher_id: str = Depends(_require_teacher)):
+    """Delete the authenticated teacher account. Learners remain preserved (unassigned)."""
+    try:
+        success = delete_teacher_account(teacher_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Teacher not found.")
+        return {"message": "Teacher account successfully deleted. Associated learners are unassigned."}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"Delete teacher account failed ({type(error).__name__}).")
+        raise HTTPException(status_code=500, detail="Could not delete teacher account.") from error
+
+
+# -------------------------
 # Learner registration
 # -------------------------
 
@@ -539,11 +741,13 @@ class LearnerRestoreRequest(BaseModel):
 
 
 @app.post("/learners/register", status_code=201)
-def learner_register(data: LearnerRegisterRequest):
-    """Teacher-assisted registration. Returns learner_id and a one-time 6-digit code.
+def learner_register(
+    data: LearnerRegisterRequest,
+    teacher_id: str = Depends(_require_teacher),
+):
+    """Teacher-assisted registration. Requires a valid teacher Bearer token.
 
-    Exactly one of phone or email must be supplied.  The 6-digit code is
-    returned in the response body and is never stored in plain text.
+    Returns learner_id and a one-time 6-digit code.
     Phone numbers and email addresses are never written to logs.
     """
     if not data.phone and not data.email:
@@ -564,6 +768,7 @@ def learner_register(data: LearnerRegisterRequest):
             batch=data.batch.strip() if data.batch else None,
             language=data.preferred_language,
             consent=data.consent,
+            teacher_id=teacher_id,
         )
     except Exception as error:
         # Avoid logging PII fields — only log the exception type.

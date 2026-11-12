@@ -16,7 +16,7 @@ import 'package:resonant_braille/accessibility/two_finger_navigation_detector.da
 import 'package:resonant_braille/learning/role_selection_page.dart';
 import 'package:resonant_braille/learning/role_store.dart';
 import 'package:resonant_braille/learning/learner_registration_page.dart';
-import 'package:resonant_braille/teacher/teacher_dashboard_placeholder.dart';
+import 'package:resonant_braille/teacher/teacher_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -96,9 +96,7 @@ class _RoleGateRootState extends State<_RoleGateRoot> {
       onSpeak: _speak,
       onStop: _stop,
       learnerHome: const _LearnerGate(),
-      teacherHome: (onSwitchRole) => TeacherDashboardPlaceholder(
-        onSwitchRole: onSwitchRole,
-      ),
+      teacherHome: (onSwitchRole) => TeacherGate(onSwitchRole: onSwitchRole),
     );
   }
 }
@@ -381,6 +379,7 @@ class _ResonantHomeState extends State<ResonantHome> {
           await LessonProgressStore.forApplication();
       final events = await store.readEvents();
       progressStore = store;
+      unawaited(store.syncPending());
       for (final event in events) {
         final id = event['exercise_id'] as String?;
         if (id == null) continue;
@@ -471,6 +470,7 @@ class _ResonantHomeState extends State<ResonantHome> {
     } catch (_) {
       // Keep the learning flow responsive; local persistence is best effort.
     }
+    unawaited(store.syncPending());
   }
 
   Future<void> configureAudio() async {
@@ -1119,6 +1119,7 @@ class _ResonantHomeState extends State<ResonantHome> {
     } catch (_) {
       // Do not block the assessment on a local storage failure.
     }
+    unawaited(store.syncPending());
   }
 
   Future<void> persistWordChapterAttempt({

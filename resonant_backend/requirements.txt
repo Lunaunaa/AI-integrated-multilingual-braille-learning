@@ -4,3 +4,5 @@ requests
 psycopg[binary]
 scikit-learn
 joblib
+passlib[bcrypt]
+python-jose[cryptography]

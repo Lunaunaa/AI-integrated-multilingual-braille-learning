@@ -26,6 +26,20 @@ PostgreSQL behaviour).  The 6-digit learner code is **never stored in
 plain text**; only its SHA-256 hash is persisted.  Phone numbers and email
 addresses are never written to application logs.
 
+Migration 003 adds the `resonant.teachers` table (`teacher_id`, `name`,
+`email`, `password_hash`, `organization`, `created_at`).  A partial unique
+index enforces `lower(email)` uniqueness.  A nullable `teacher_id` foreign
+key is added to `resonant.learners` to link each learner to their
+registering teacher.  Passwords are hashed with bcrypt and are never stored
+in plain text or logged.  The column `registered_by` (TEXT, from 002) is
+kept as-is for legacy rows; new registrations use the typed `teacher_id` FK.
+
+Migration 004 adds an index on `resonant.learners (teacher_id, created_at DESC)`
+to support performant teacher dashboard queries. All learner metrics
+(last_active_at, accuracy percentage, 7-day attempt counts, top weak skills,
+and activity status) are computed dynamically from `resonant.practice_attempts`
+and `resonant.skill_progress`.
+
 Each write uses a psycopg connection context, so the event insert and mastery
 update commit or roll back together. Submission UUIDs prevent retries from
 creating duplicate attempts or quiz results. Only correct and incorrect
@@ -54,14 +68,46 @@ successful version. The SQL is additive and scoped to `resonant`.
 - `GET /health/database` checks PostgreSQL availability.
 - `POST /learners` creates or updates a learner's preferred language.
 - `GET /learners/{learner_id}` reads a learner profile.
-- `POST /learners/register` — teacher-assisted registration.  Accepts
+- `POST /learners/register` — teacher-assisted registration.  **Requires a
+  valid teacher `Bearer` token** (`Authorization: Bearer <token>`).  Accepts
   `name` (required), `phone` (digits, 7–15 chars), `email`, `batch`,
   `preferred_language`, and `consent` (boolean).  At least one of `phone`
-  or `email` is required; `consent` must be `true`.  Returns `learner_id`
-  and a one-time plaintext `learner_code` (6 digits, hashed before storage).
+  or `email` is required; `consent` must be `true`.  Stores the registering
+  `teacher_id` from the token.  Returns `learner_id` and a one-time
+  plaintext `learner_code` (6 digits, hashed before storage).
 - `POST /learners/restore` — restore an account on a new device.  Accepts
   `phone_or_email` and the 6-digit `code`.  Returns the learner profile on
   success; 404 if credentials do not match.
+- `POST /teachers/signup` — create a teacher account.  Accepts `name`,
+  `email`, `password` (min 8 chars), `organization` (optional).  Returns
+  the teacher profile; 409 if email already registered.  Passwords are
+  bcrypt-hashed and never logged.
+- `POST /teachers/login` — verify credentials; return a signed JWT token
+  (30-day expiry).  Rate-limited to 10 attempts per email per 10 minutes;
+  returns 429 when exceeded.  Returns 401 on wrong credentials.  Emails
+  and passwords are never logged.
+- `GET /teachers/me/learners` — list this teacher's registered learners
+  (id, name, batch, created_at).  Requires `Authorization: Bearer <token>`.
+- `GET /teachers/me/dashboard` — dashboard summary and list of all learners
+  belonging to the authenticated teacher. Returns summary metrics (total,
+  active this week, struggling count) and per-learner details (id, name,
+  batch, last_active_at, current stage/letter, accuracy %, 7-day attempt
+  count, top 3 weak letters, status). Requires `Authorization: Bearer <token>`.
+- `GET /teachers/me/learners/{id}` — detailed metrics and recent 50 attempt
+  records for a single learner. Includes contact info (phone/email). Returns
+  404 if the learner does not exist or belongs to another teacher. Requires
+  `Authorization: Bearer <token>`.
+- `POST /teachers/forgot-password` — generates a 15-minute one-time reset
+  token for a registered email. Logs the token to the server console (mock
+  email provider). Never logs emails.
+- `POST /teachers/reset-password` — verifies the reset token and updates the
+  teacher's bcrypt password hash.
+- `DELETE /learners/{id}` — permanently removes a learner and cascades to all
+  their attempts, quiz results, and skill progress. Requires `Authorization: Bearer <token>`
+  and only allows deleting learners assigned to the calling teacher (404 otherwise).
+- `DELETE /teachers/me` — deletes the calling teacher's account. Preserves
+  all associated learners and their learning records by setting `teacher_id = NULL`.
+  Requires `Authorization: Bearer <token>`.
 - `POST /practice/attempts` records an idempotent practice event and updates
   skill progress for correct/incorrect answers.
 - `GET /learners/{learner_id}/progress` reads skill mastery.
@@ -75,11 +121,18 @@ database integration run.
 
 The Flutter app also writes a local JSON event log in application documents
 for offline English lesson attempts. It assigns a new UUID to each attempt and
-keeps events marked pending; the client does not yet upload them or reconcile
-conflicts with this PostgreSQL store.
+queues pending events locally (`synced_at: null`); when an account is active
+and online, pending events are synced idempotently to `/practice/attempts`.
 
 ## Privacy limitation
 
-Learner profile and progress endpoints do not have authentication yet. Keep
-this API on a trusted local development network. Do not deploy it or use it for
-private learner records until authentication and authorization are added.
+Learner progress and restore endpoints remain unauthenticated.  Teacher
+registration (`POST /teachers/signup`, `POST /teachers/login`) and learner
+registration (`POST /learners/register`) enforce authentication.  Keep this
+API on a trusted local development network. Do not deploy it or use it for
+private learner records until all endpoints have authentication and
+authorization.
+
+Set `RESONANT_JWT_SECRET` to a long random value in production to sign
+teacher tokens.  Tokens have a 30-day expiry and are validated on every
+authenticated request.

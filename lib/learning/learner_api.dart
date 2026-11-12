@@ -2,26 +2,28 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../core/api_config.dart';
 import 'learner_account_store.dart';
-
-/// Re-uses the base-URL constant from http_tutor_gateway.dart.
-const _apiBaseUrl = String.fromEnvironment(
-  'RESONANT_TUTOR_API_BASE',
-  defaultValue: 'http://localhost:8000',
-);
 
 /// Thin HTTP client for learner registration and account restore.
 ///
 /// All public methods throw [LearnerApiException] on network or server errors.
 class LearnerApi {
-  LearnerApi({http.Client? client, Uri? baseUri})
+  LearnerApi({http.Client? client, Uri? baseUri, this.teacherToken})
       : _client = client ?? http.Client(),
-        _baseUri = baseUri ?? Uri.parse(_apiBaseUrl);
+        _baseUri = baseUri ?? Uri.parse(apiBaseUrl);
 
   final http.Client _client;
   final Uri _baseUri;
 
-  static const _headers = {'content-type': 'application/json'};
+  /// Bearer token of the logged-in teacher. Required for registration.
+  final String? teacherToken;
+
+  Map<String, String> get _headers {
+    final h = <String, String>{'content-type': 'application/json'};
+    if (teacherToken != null) h['authorization'] = 'Bearer $teacherToken';
+    return h;
+  }
   static const _timeout = Duration(seconds: 15);
 
   /// Calls POST /learners/register.
